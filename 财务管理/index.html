@@ -38,46 +38,7 @@ $(function() {
 <div class="menu_list">
 <dl>
 <dt><span>一级分类名称</span></dt>
-<dd><a href="" title="二级分类">二级分类</a>
-<a href="" title="二级分类">二级分类</a>
-<a href="" title="二级分类" class="active">二级分类</a>
-<a href="" title="二级分类">二级分类</a></dd>
-
-<dt><span>一级分类名称</span></dt>
-<dd><a href="" title="二级分类">二级分类</a>
-<a href="" title="二级分类">二级分类</a>
-<a href="" title="二级分类">二级分类</a>
-<a href="" title="二级分类">二级分类</a></dd>
-
-<dt><span>一级分类名称</span></dt>
-<dd><a href="" title="二级分类">二级分类</a>
-<a href="" title="二级分类">二级分类</a>
-<a href="" title="二级分类">二级分类</a>
-<a href="" title="二级分类">二级分类</a></dd>
-
-<dt><span>一级分类名称</span></dt>
-<dd><a href="" title="二级分类">二级分类</a>
-<a href="" title="二级分类">二级分类</a>
-<a href="" title="二级分类">二级分类</a>
-<a href="" title="二级分类">二级分类</a></dd>
-
-<dt><span>一级分类名称</span></dt>
-<dd><a href="" title="二级分类">二级分类</a>
-<a href="" title="二级分类">二级分类</a>
-<a href="" title="二级分类">二级分类</a>
-<a href="" title="二级分类">二级分类</a></dd>
-
-<dt><span>一级分类名称</span></dt>
-<dd><a href="" title="二级分类">二级分类</a>
-<a href="" title="二级分类">二级分类</a>
-<a href="" title="二级分类">二级分类</a>
-<a href="" title="二级分类">二级分类</a></dd>
-
-<dt><span>一级分类名称</span></dt>
-<dd><a href="" title="二级分类">二级分类</a>
-<a href="" title="二级分类">二级分类</a>
-<a href="" title="二级分类">二级分类</a>
-<a href="" title="二级分类">二级分类</a></dd>
+<dd><a href="index.html" title="二级分类">二级分类</a></dd>
 </dl>
 </div>
 <!-- /menu_list -->
@@ -97,7 +58,7 @@ $(function() {
 <div id="Header">
 <!-- Head -->
 <div id="Head">
-<h1 title="青岛海尔人单合一系统管理后台"><img src="images/common/page_ttl.gif" width="398" height="26" alt="青岛海尔人单合一系统管理后台"></h1>
+<h1 title="管理系统"><img src="images/common/page_ttl.gif" width="398" height="26" alt="管理系统"></h1>
 <script language="javascript">
 function showmenu(id){id.style.visibility = "visible";}
 function hidmenu(){UserList.style.visibility = "hidden";}
@@ -112,14 +73,8 @@ document.onclick = hidmenu;
 <!-- /Head -->
 <nav>
 <ul id="Navi">
-<li><a href=""><img src="images/common/navi01.png" width="30" height="36" alt="主页管理"><span>主页管理</span></a></li>
-<li><a href=""><img src="images/common/navi02.png" width="36" height="36" alt="系统管理"><span>系统管理</span></a></li>
-<li class="active"><a href=""><img src="images/common/navi03.png" width="26" height="36" alt="合同信息"><span>合同信息</span></a></li>
-<li><a href=""><img src="images/common/navi04.png" width="34" height="36" alt="基础数据"><span>基础数据</span></a></li>
-<li><a href=""><img src="images/common/navi05.png" width="24" height="36" alt="预算管理"><span>预算管理</span></a></li>
-<li><a href=""><img src="images/common/navi06.png" width="36" height="36" alt="项目管理"><span>项目管理</span></a></li>
-<li><a href=""><img src="images/common/navi07.png" width="34" height="36" alt="资金支付-发票"><span>资金支付-发票</span></a></li>
-<li><a href=""><img src="images/common/navi08.png" width="34" height="36" alt="产品管理信息"><span>产品管理信息</span></a></li>
+<li class="active"><a href=""><img src="images/common/navi01.png" width="30" height="36" alt="主页"><span>主页</span></a></li>
+<li><a href=""><img src="images/common/navi02.png" width="36" height="36" alt="系统设置"><span>系统设置</span></a></li>
 </ul>
 </nav>
 </div>
@@ -145,194 +100,43 @@ $("body").click(function(i){ !$(i.target).parents(".select").first().is(s) ? _hi
 <!-- TopMain -->
 <div id="TopMain">
 <!-- selectbox -->
-<div class="selectbox floatL mag_r20">
-<span class="sttl">年度：</span>
-<dl class="select" style="width:200px;">
-<dt>全部</dt>
-<dd><ul>
-<li><a href="#">选项选项A</a></li>
-<li><a href="#">选项选项B</a></li>
-<li><a href="#">选项选项C</a></li>
-<li><a href="#">选项选项D</a></li>
-<li><a href="#">选项选项E</a></li>
-</ul></dd></dl>
-</div>
-<!-- /selectbox -->
-
-<!-- selectbox -->
-<div class="selectbox floatL mag_r20">
-<span class="sttl">部门：</span>
-<dl class="select" style="width:200px;">
-<dt>全部</dt>
-<dd><ul>
-<li><a href="#">选项选项A</a></li>
-<li><a href="#">选项选项B</a></li>
-<li><a href="#">选项选项C</a></li>
-<li><a href="#">选项选项D</a></li>
-<li><a href="#">选项选项E</a></li>
-</ul></dd></dl>
-</div>
-<!-- /selectbox -->
-
-<!-- btn_box -->
-<div class="btn_box floatL"><input name="" type="button" value="查询" onmousemove="this.className='input_move'" onmouseout="this.className='input_out'"></div>
-<!-- /btn_box -->
+<!-- 搜索/筛选区域，请在此处添加您的内容 -->
 </div>
 <!-- /TopMain -->
 
 <!-- MainForm -->
 <div id="MainForm">
 <div class="form_boxA">
-<h2>年度预算列表</h2>
+<h2>数据列表标题</h2>
 <table cellpadding="0" cellspacing="0">
 <tr>
-<th>序号</th>
-<th>部门</th>
-<th>年度</th>
-<th>提交人</th>
-<th>预算收入（元）</th>
-<th>预算成本（元）</th>
-<th>预算费用（元）</th>
-<th>状态</th>
+<th>列名 1</th>
+<th>列名 2</th>
+<th>列名 3</th>
 <th>操作</th>
 </tr>
 <tr>
-<td>1</td>
-<td>财务部</td>
-<td>2015</td>
-<td>王友强</td>
-<td>120890000.00</td>
-<td>120890000.00</td>
-<td>120890000.00</td>
-<td class="f_cA">审核通过</td>
-<td><a href="#">查看</a> | <a href="#">操作</a></td>
-</tr>
-<tr>
-<td>2</td>
-<td>财务部</td>
-<td>2015</td>
-<td>王友强</td>
-<td>120890000.00</td>
-<td>120890000.00</td>
-<td>120890000.00</td>
-<td class="f_cB">审核未通过</td>
-<td><a href="#">查看</a> | <a href="#">操作</a></td>
-</tr>
-<tr>
-<td>3</td>
-<td>财务部</td>
-<td>2015</td>
-<td>王友强</td>
-<td>120890000.00</td>
-<td>120890000.00</td>
-<td>120890000.00</td>
-<td class="f_cA">审核通过</td>
-<td><a href="#">查看</a> | <a href="#">操作</a></td>
-</tr>
-<tr>
-<td>4</td>
-<td>财务部</td>
-<td>2015</td>
-<td>王友强</td>
-<td>120890000.00</td>
-<td>120890000.00</td>
-<td>120890000.00</td>
-<td class="f_cA">审核通过</td>
-<td><a href="#">查看</a> | <a href="#">操作</a></td>
-</tr>
-<tr>
-<td>5</td>
-<td>财务部</td>
-<td>2015</td>
-<td>王友强</td>
-<td>120890000.00</td>
-<td>120890000.00</td>
-<td>120890000.00</td>
-<td class="f_cA">审核通过</td>
-<td><a href="#">查看</a> | <a href="#">操作</a></td>
-</tr>
-<tr>
-<td>6</td>
-<td>财务部</td>
-<td>2015</td>
-<td>王友强</td>
-<td>120890000.00</td>
-<td>120890000.00</td>
-<td>120890000.00</td>
-<td class="f_cA">审核通过</td>
-<td><a href="#">查看</a> | <a href="#">操作</a></td>
-</tr>
-<tr>
-<td>7</td>
-<td>财务部</td>
-<td>2015</td>
-<td>王友强</td>
-<td>120890000.00</td>
-<td>120890000.00</td>
-<td>120890000.00</td>
-<td class="f_cA">审核通过</td>
-<td><a href="#">查看</a> | <a href="#">操作</a></td>
-</tr>
-<tr>
-<td>8</td>
-<td>财务部</td>
-<td>2015</td>
-<td>王友强</td>
-<td>120890000.00</td>
-<td>120890000.00</td>
-<td>120890000.00</td>
-<td class="f_cA">审核通过</td>
-<td><a href="#">查看</a> | <a href="#">操作</a></td>
-</tr>
-<tr>
-<td>9</td>
-<td>财务部</td>
-<td>2015</td>
-<td>王友强</td>
-<td>120890000.00</td>
-<td>120890000.00</td>
-<td>120890000.00</td>
-<td class="f_cA">审核通过</td>
-<td><a href="#">查看</a> | <a href="#">操作</a></td>
-</tr>
-<tr>
-<td>10</td>
-<td>财务部</td>
-<td>2015</td>
-<td>王友强</td>
-<td>120890000.00</td>
-<td>120890000.00</td>
-<td>120890000.00</td>
-<td class="f_cA">审核通过</td>
-<td><a href="#">查看</a> | <a href="#">操作</a></td>
+<td>示例数据 1</td>
+<td>示例数据 2</td>
+<td>示例数据 3</td>
+<td><a href="#">查看</a> | <a href="#">编辑</a></td>
 </tr>
 </table>
-<p class="msg">共找到47条年度预算记录，当前显示从第1条至第10条</p>
+<p class="msg">请在此处添加您的实际数据</p>
 </div>
 </div>
 <!-- /MainForm -->
 
 
 <!-- PageNum -->
-<ul id="PageNum">
-<li><a href="">首页</a></li>
-<li><a href="">上一页</a></li>
-<li><a href="">1</a></li>
-<li><a href="">2</a></li>
-<li><a href="">3</a></li>
-<li><a href="">4</a></li>
-<li><a href="">5</a></li>
-<li><a href="">6</a></li>
-<li><a href="">下一页</a></li>
-<li><a href="">尾页</a></li>
-</ul>
+<!-- 分页区域，请在此处添加您的分页逻辑 -->
 <!-- /PageNum -->
 </div>
 <!-- /Contents -->
 
 <!-- /footer -->
 <footer>
-<address>电子邮箱：sales@haiersoft.com  技术支持：人单合一平台项目组<br>青岛海尔软件有限公司版权所有  Copyright &copy; 2015 Haiersoft Corporation, All Rights.</address>
+<address>版权信息：请在此处添加您的版权信息</address>
 </footer>
 <!-- /footer -->
 
