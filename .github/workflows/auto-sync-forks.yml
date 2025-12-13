@@ -1,0 +1,160 @@
+name: Auto Sync Forks (Beijing Time Log)
+
+on:
+  # 计划任务：每小时运行一次 (UTC时间不需要改，脚本内部会自动算北京时间)
+  schedule:
+    - cron: '0 * * * *'
+  # 允许手动点击按钮触发
+  workflow_dispatch:
+
+permissions:
+  contents: write # 允许提交日志文件
+
+jobs:
+  sync-and-log:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Sync Forks & Rotate Logs
+        shell: pwsh
+        env:
+          # 必须在仓库 Settings -> Secrets 中配置 GH_PAT
+          GITHUB_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          # =======================================================
+          #  嵌入式 PowerShell 脚本 (无需外部文件)
+          # =======================================================
+          
+          # --- 1. 初始化设置 ---
+          $LogFile = "SYNC_LOG.md"
+          $KeepDays = 7
+          # 手动计算北京时间 (UTC + 8)
+          $BeijingTime = [DateTime]::UtcNow.AddHours(8)
+          $DateStr = $BeijingTime.ToString("yyyy-MM-dd HH:mm")
+          $DateHeaderRegex = "## 📅 (\d{4}-\d{2}-\d{2} \d{2}:\d{2})"
+          
+          # --- 2. 检查 Token ---
+          $Token = $env:GITHUB_TOKEN
+          if ([string]::IsNullOrWhiteSpace($Token)) {
+              Write-Error "❌ 错误: 未检测到 GITHUB_TOKEN，请检查仓库 Secrets 设置。"
+              exit 1
+          }
+          
+          $Headers = @{
+              "Authorization" = "token $Token"
+              "Accept"        = "application/vnd.github+json"
+              "X-GitHub-Api-Version" = "2022-11-28"
+          }
+          $BaseUri = "https://api.github.com"
+
+          # --- 3. 获取所有 Fork 仓库 (自动翻页) ---
+          Write-Host ">>> 正在扫描仓库列表..."
+          $AllRepos = @()
+          $Page = 1
+          do {
+              $Uri = "$BaseUri/user/repos?type=owner&per_page=100&page=$Page"
+              try {
+                  $Response = Invoke-RestMethod -Uri $Uri -Headers $Headers -Method Get
+                  if ($Response.Count -gt 0) { $AllRepos += $Response; $Page++ }
+              } catch { Write-Error "API 请求失败: $($_.Exception.Message)"; exit 1 }
+          } while ($Response.Count -eq 100)
+
+          $Forks = $AllRepos | Where-Object { $_.fork -eq $true -and $_.archived -eq $false }
+          Write-Host ">>> 发现 $($Forks.Count) 个活跃的 Fork 仓库。"
+
+          # --- 4. 循环同步 ---
+          $UpdateList = @()
+          
+          foreach ($repo in $Forks) {
+              $RepoName = $repo.full_name
+              $DefaultBranch = $repo.default_branch
+              $SyncUri = "$BaseUri/repos/$RepoName/merge-upstream"
+              $Body = @{ branch = $DefaultBranch } | ConvertTo-Json -Compress
+
+              try {
+                  $SyncResponse = Invoke-RestMethod -Uri $SyncUri -Headers $Headers -Method Post -Body $Body -ErrorAction Stop
+                  
+                  # 只有 update 成功才记录
+                  if ($SyncResponse.message -match "Successfully fetched" -or $SyncResponse.merge_type -eq "fast-forward") {
+                      $Msg = "✅ **$RepoName** ($DefaultBranch): 同步成功"
+                      Write-Host "$RepoName -> [更新成功]" -ForegroundColor Green
+                      $UpdateList += $Msg
+                  } else {
+                      Write-Host "$RepoName -> [最新]" -ForegroundColor Gray
+                  }
+              }
+              catch {
+                  $StatusCode = 0; if ($_.Exception.Response) { $StatusCode = $_.Exception.Response.StatusCode.value__ }
+                  if ($StatusCode -eq 409) { Write-Host "$RepoName -> [冲突或最新]" -ForegroundColor DarkGray }
+                  elseif ($StatusCode -eq 404) { Write-Host "$RepoName -> [上游丢失]" -ForegroundColor Red }
+                  else { Write-Host "$RepoName -> [错误 $StatusCode]" -ForegroundColor Red }
+              }
+              Start-Sleep -Milliseconds 100 # 防限流
+          }
+
+          # --- 5. 处理日志 (倒序 + 清理旧日志) ---
+          
+          # 读取旧内容
+          $CurrentContent = ""
+          if (Test-Path $LogFile) { $CurrentContent = Get-Content $LogFile -Raw -Encoding utf8 }
+          
+          # 只有当有更新时，才生成新的日志块
+          if ($UpdateList.Count -gt 0) {
+              Write-Host ">>> 检测到更新，正在写入日志..."
+              
+              $NewBlock = "## 📅 $DateStr (北京时间)`n`n"
+              foreach ($item in $UpdateList) { $NewBlock += "- $item`n" }
+              $NewBlock += "`n"
+
+              # 拼接：文件头 + 新块 + (旧内容去掉文件头)
+              $Header = "# 同步日志`n`n此文件由 GitHub Actions 自动生成，仅保留最近 $KeepDays 天记录。`n`n"
+              
+              # 去除旧文件头，只保留正文部分
+              $BodyOnly = $CurrentContent -replace "^# 同步日志.*?\n\n", ""
+              
+              $FullContent = $Header + $NewBlock + $BodyOnly
+              
+              # --- 6. 清理超过7天的记录 ---
+              # 利用正则拆分所有日期块
+              $Blocks = $FullContent -split "(?=## 📅)"
+              $FilteredBlocks = @()
+              $CutoffDate = $BeijingTime.AddDays(-$KeepDays)
+
+              foreach ($block in $Blocks) {
+                  # 尝试提取日期
+                  if ($block -match $DateHeaderRegex) {
+                      $BlockDateStr = $Matches[1]
+                      try {
+                          $BlockDate = [DateTime]::ParseExact($BlockDateStr, "yyyy-MM-dd HH:mm", $null)
+                          if ($BlockDate -ge $CutoffDate) {
+                              $FilteredBlocks += $block
+                          }
+                      } catch {
+                          $FilteredBlocks += $block # 解析不了的保留，以防万一
+                      }
+                  } else {
+                      $FilteredBlocks += $block # 保留文件头
+                  }
+              }
+              
+              $FinalContent = $FilteredBlocks -join ""
+              Set-Content -Path $LogFile -Value $FinalContent -Encoding utf8
+          } else {
+              Write-Host ">>> 本次无仓库更新，跳过日志写入。"
+          }
+
+      - name: Commit and Push
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          
+          if [[ -n $(git status -s SYNC_LOG.md) ]]; then
+            git add SYNC_LOG.md
+            git commit -m "docs: update sync log [skip ci]"
+            git push
+            echo "✅ 日志已推送到仓库。"
+          else
+            echo "✅ 日志无变化。"
+          fi
