@@ -1,14 +1,12 @@
-name: Auto Sync Forks (Beijing Time Log)
+name: Auto Sync Forks (With Failure Reasons)
 
 on:
-  # 计划任务：每小时运行一次 (UTC时间不需要改，脚本内部会自动算北京时间)
   schedule:
-    - cron: '0 * * * *'
-  # 允许手动点击按钮触发
-  workflow_dispatch:
+    - cron: '0 * * * *' # 每小时执行
+  workflow_dispatch:    # 允许手动触发
 
 permissions:
-  contents: write # 允许提交日志文件
+  contents: write
 
 jobs:
   sync-and-log:
@@ -17,20 +15,19 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Sync Forks & Rotate Logs
+      - name: Sync Forks & Report Failures
         shell: pwsh
         env:
-          # 必须在仓库 Settings -> Secrets 中配置 GH_PAT
           GITHUB_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           # =======================================================
-          #  嵌入式 PowerShell 脚本 (无需外部文件)
+          #  嵌入式 PowerShell 脚本 (含错误原因记录)
           # =======================================================
           
           # --- 1. 初始化设置 ---
-          $LogFile = "SYNC_LOG.md"
+          $LogFile = "README.md"
           $KeepDays = 7
-          # 手动计算北京时间 (UTC + 8)
+          # 北京时间 (UTC + 8)
           $BeijingTime = [DateTime]::UtcNow.AddHours(8)
           $DateStr = $BeijingTime.ToString("yyyy-MM-dd HH:mm")
           $DateHeaderRegex = "## 📅 (\d{4}-\d{2}-\d{2} \d{2}:\d{2})"
@@ -49,7 +46,7 @@ jobs:
           }
           $BaseUri = "https://api.github.com"
 
-          # --- 3. 获取所有 Fork 仓库 (自动翻页) ---
+          # --- 3. 获取所有 Fork 仓库 ---
           Write-Host ">>> 正在扫描仓库列表..."
           $AllRepos = @()
           $Page = 1
@@ -64,85 +61,120 @@ jobs:
           $Forks = $AllRepos | Where-Object { $_.fork -eq $true -and $_.archived -eq $false }
           Write-Host ">>> 发现 $($Forks.Count) 个活跃的 Fork 仓库。"
 
-          # --- 4. 循环同步 ---
-          $UpdateList = @()
+          # --- 4. 循环同步并捕获原因 ---
+          $LogEntries = @() # 用于存放本次写入日志的条目
           
           foreach ($repo in $Forks) {
               $RepoName = $repo.full_name
               $DefaultBranch = $repo.default_branch
               $SyncUri = "$BaseUri/repos/$RepoName/merge-upstream"
               $Body = @{ branch = $DefaultBranch } | ConvertTo-Json -Compress
+              
+              # 控制台显示进度
+              Write-Host "Checking: $RepoName" -NoNewline
 
               try {
                   $SyncResponse = Invoke-RestMethod -Uri $SyncUri -Headers $Headers -Method Post -Body $Body -ErrorAction Stop
                   
-                  # 只有 update 成功才记录
                   if ($SyncResponse.message -match "Successfully fetched" -or $SyncResponse.merge_type -eq "fast-forward") {
-                      $Msg = "✅ **$RepoName** ($DefaultBranch): 同步成功"
-                      Write-Host "$RepoName -> [更新成功]" -ForegroundColor Green
-                      $UpdateList += $Msg
+                      Write-Host " -> [成功更新]" -ForegroundColor Green
+                      # 添加到日志
+                      $LogEntries += "✅ **$RepoName** ($DefaultBranch): 同步成功"
                   } else {
-                      Write-Host "$RepoName -> [最新]" -ForegroundColor Gray
+                      Write-Host " -> [状态: $($SyncResponse.message)]" -ForegroundColor Yellow
                   }
               }
               catch {
-                  $StatusCode = 0; if ($_.Exception.Response) { $StatusCode = $_.Exception.Response.StatusCode.value__ }
-                  if ($StatusCode -eq 409) { Write-Host "$RepoName -> [冲突或最新]" -ForegroundColor DarkGray }
-                  elseif ($StatusCode -eq 404) { Write-Host "$RepoName -> [上游丢失]" -ForegroundColor Red }
-                  else { Write-Host "$RepoName -> [错误 $StatusCode]" -ForegroundColor Red }
+                  # 获取错误详情
+                  $Ex = $_.Exception
+                  $StatusCode = 0
+                  $ErrorMsg = "未知错误"
+                  
+                  if ($Ex.Response) {
+                      $StatusCode = $Ex.Response.StatusCode.value__
+                  }
+                  
+                  # 尝试从 GitHub 返回的 JSON 中读取错误信息
+                  try {
+                      $JsonStream = $Ex.Response.GetResponseStream()
+                      $Reader = New-Object System.IO.StreamReader($JsonStream)
+                      $JsonStr = $Reader.ReadToEnd()
+                      $ErrorDetails = $JsonStr | ConvertFrom-Json
+                      if ($ErrorDetails.message) { $ErrorMsg = $ErrorDetails.message }
+                  } catch {
+                      $ErrorMsg = $Ex.Message
+                  }
+
+                  # --- 根据错误类型决定是否记录到日志 ---
+                  
+                  if ($StatusCode -eq 409) {
+                      if ($ErrorMsg -match "Branch is not behind") {
+                          # 情况A: 已经是最新 -> 控制台打印灰色，但不写入日志（防刷屏）
+                          Write-Host " -> [无需更新]" -ForegroundColor Gray
+                      } else {
+                          # 情况B: 冲突 -> 必须记录！
+                          Write-Host " -> [代码冲突]" -ForegroundColor Red
+                          $LogEntries += "⚠️ **$RepoName**: 同步失败 - **代码冲突** (无法自动合并，请手动解决)"
+                      }
+                  }
+                  elseif ($StatusCode -eq 404) {
+                      # 情况C: 上游没了
+                      Write-Host " -> [上游丢失]" -ForegroundColor Red
+                      $LogEntries += "❌ **$RepoName**: 同步失败 - **上游仓库不存在** (可能已被原作者删除)"
+                  }
+                  elseif ($StatusCode -eq 422) {
+                      # 情况D: 无法处理 (如历史记录不相关)
+                      Write-Host " -> [无法处理]" -ForegroundColor Red
+                      $LogEntries += "❌ **$RepoName**: 同步失败 - **无法合并** (历史记录不相关/Git 错误)"
+                  }
+                  else {
+                      # 情况E: 其他错误
+                      Write-Host " -> [错误 $StatusCode]" -ForegroundColor Red
+                      $LogEntries += "❌ **$RepoName**: 同步失败 - HTTP $StatusCode ($ErrorMsg)"
+                  }
               }
               Start-Sleep -Milliseconds 100 # 防限流
           }
 
-          # --- 5. 处理日志 (倒序 + 清理旧日志) ---
+          # --- 5. 生成并写入日志 ---
           
           # 读取旧内容
           $CurrentContent = ""
           if (Test-Path $LogFile) { $CurrentContent = Get-Content $LogFile -Raw -Encoding utf8 }
           
-          # 只有当有更新时，才生成新的日志块
-          if ($UpdateList.Count -gt 0) {
-              Write-Host ">>> 检测到更新，正在写入日志..."
+          # 只有当 $LogEntries 不为空时（有成功更新 或 有错误/冲突）才写入
+          if ($LogEntries.Count -gt 0) {
+              Write-Host "`n>>> 正在更新日志文件..."
               
               $NewBlock = "## 📅 $DateStr (北京时间)`n`n"
-              foreach ($item in $UpdateList) { $NewBlock += "- $item`n" }
+              foreach ($item in $LogEntries) { $NewBlock += "- $item`n" }
               $NewBlock += "`n"
 
-              # 拼接：文件头 + 新块 + (旧内容去掉文件头)
+              # 拼接内容
               $Header = "# 同步日志`n`n此文件由 GitHub Actions 自动生成，仅保留最近 $KeepDays 天记录。`n`n"
-              
-              # 去除旧文件头，只保留正文部分
               $BodyOnly = $CurrentContent -replace "^# 同步日志.*?\n\n", ""
-              
               $FullContent = $Header + $NewBlock + $BodyOnly
               
-              # --- 6. 清理超过7天的记录 ---
-              # 利用正则拆分所有日期块
+              # 清理过期日志
               $Blocks = $FullContent -split "(?=## 📅)"
               $FilteredBlocks = @()
               $CutoffDate = $BeijingTime.AddDays(-$KeepDays)
 
               foreach ($block in $Blocks) {
-                  # 尝试提取日期
                   if ($block -match $DateHeaderRegex) {
-                      $BlockDateStr = $Matches[1]
                       try {
-                          $BlockDate = [DateTime]::ParseExact($BlockDateStr, "yyyy-MM-dd HH:mm", $null)
-                          if ($BlockDate -ge $CutoffDate) {
-                              $FilteredBlocks += $block
-                          }
-                      } catch {
-                          $FilteredBlocks += $block # 解析不了的保留，以防万一
-                      }
+                          $BlockDate = [DateTime]::ParseExact($Matches[1], "yyyy-MM-dd HH:mm", $null)
+                          if ($BlockDate -ge $CutoffDate) { $FilteredBlocks += $block }
+                      } catch { $FilteredBlocks += $block }
                   } else {
-                      $FilteredBlocks += $block # 保留文件头
+                      $FilteredBlocks += $block 
                   }
               }
               
               $FinalContent = $FilteredBlocks -join ""
               Set-Content -Path $LogFile -Value $FinalContent -Encoding utf8
           } else {
-              Write-Host ">>> 本次无仓库更新，跳过日志写入。"
+              Write-Host "`n>>> 所有仓库均为最新状态，无变化需要记录。"
           }
 
       - name: Commit and Push
@@ -150,11 +182,11 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           
-          if [[ -n $(git status -s SYNC_LOG.md) ]]; then
-            git add SYNC_LOG.md
-            git commit -m "docs: update sync log [skip ci]"
+          if [[ -n $(git status -s README.md) ]]; then
+            git add README.md
+            git commit -m "docs: update sync log with status [skip ci]"
             git push
-            echo "✅ 日志已推送到仓库。"
+            echo "✅ 日志已更新并推送。"
           else
             echo "✅ 日志无变化。"
           fi
