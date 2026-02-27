@@ -19,17 +19,20 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.MY_PAT }}
           USER_NAME: "hc990275"
+          GIT_TERMINAL_PROMPT: 0  # 绝对禁止 Git 在后台卡住等待任何密码输入
         run: |
           pip install requests
           
           # 注意：此处的 'EOF' 使用了单引号，这极其关键！
           # 它确保了下方的 Python 代码中的反斜杠（如 '\'） 原样传入 Python，不会被 Bash 提前转义掉。
-          python - <<'EOF'
+          # 加上 -u 参数强制 python 实时打印日志（无缓冲），不然在 Actions 里前面的打印可能会被憋着
+          python -u - <<'EOF'
           import os
           import requests
           import subprocess
           import urllib.parse
           import shutil
+          import sys
 
           token = os.getenv('GH_TOKEN')
           username = os.getenv('USER_NAME')
@@ -105,6 +108,7 @@ jobs:
               print(f"\n====================================")
               print(f">>> [总体进度: {repo_index + 1}/{total_repos} ({repo_progress:.1f}%)] 正在处理仓库: {repo_name}")
               print(f"====================================")
+              sys.stdout.flush() # 强制立刻刷新缓冲输出
               
               # 使用你的名字以及 PAT 设置克隆 URL
               clone_url = repo['clone_url'].replace("https://", f"https://{username}:{token}@")
@@ -112,8 +116,9 @@ jobs:
               if os.path.exists('temp_repo'):
                   shutil.rmtree('temp_repo')
               
-              if subprocess.run(["git", "clone", clone_url, "temp_repo"], capture_output=True).returncode != 0:
-                  print(f"该仓库克隆失败: {repo_name}，可能没有权限。")
+              # 注意：这里加入了 --depth 1 浅克隆，只需要克隆一层最新文件，极大加速并防止网络卡死
+              if subprocess.run(["git", "clone", "--depth", "1", clone_url, "temp_repo"], capture_output=True).returncode != 0:
+                  print(f"该仓库克隆失败: {repo_name}，可能没有权限或者该仓库为空。")
                   continue
 
               os.chdir('temp_repo')
