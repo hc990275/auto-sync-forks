@@ -22,74 +22,152 @@ jobs:
         run: |
           pip install requests
           
-          # 全局配置防止再次转义
-          git config --global user.name "GitHub Action Bot"
-          git config --global user.email "action@github.com"
-          git config --global core.quotepath false
-
-          python - <<EOF
+          # 注意：此处的 'EOF' 使用了单引号，这极其关键！
+          # 它确保了下方的 Python 代码中的反斜杠（如 '\'） 原样传入 Python，不会被 Bash 提前转义掉。
+          python - <<'EOF'
           import os
           import requests
           import subprocess
+          import urllib.parse
+          import shutil
 
           token = os.getenv('GH_TOKEN')
           username = os.getenv('USER_NAME')
+          
+          if not token:
+              print("❌ 错误：未设置 GH_TOKEN 环境变量！")
+              exit(1)
+
           headers = {
               'Authorization': f'token {token}',
               'Accept': 'application/vnd.github.v3+json'
           }
 
-          # 获取该用户作为 owner 的所有仓库
-          api_url = "https://api.github.com/user/repos?per_page=100&type=owner"
-          
-          try:
-              response = requests.get(api_url, headers=headers)
-              response.raise_for_status()
-              repos = response.json()
-          except Exception as e:
-              print(f"Error fetching repos: {e}")
-              exit(1)
+          subprocess.run(["git", "config", "--global", "user.name", "GitHub Action Bot"])
+          subprocess.run(["git", "config", "--global", "user.email", "action@github.com"])
+          subprocess.run(["git", "config", "--global", "core.quotepath", "false"])
 
-          for repo in repos:
+          # 获取所有仓库（加入分页功能，防止仓库数超过100只获取到部分）
+          repos = []
+          page = 1
+          while True:
+              api_url = f"https://api.github.com/user/repos?per_page=100&type=owner&page={page}"
+              print(f"正在获取第 {page} 页仓库...")
+              try:
+                  response = requests.get(api_url, headers=headers)
+                  response.raise_for_status()
+                  page_repos = response.json()
+                  if not page_repos:
+                      break
+                  repos.extend(page_repos)
+                  page += 1
+              except Exception as e:
+                  print(f"❌ 获取仓库列表时出错: {e}")
+                  exit(1)
+
+          total_repos = len(repos)
+          print(f"✅ 成功获取了 {total_repos} 个仓库的信息，准备开始全局扫描。")
+
+          def decode_path(path_str):
+              decoded = path_str
+              
+              # 1. 尝试 URL 解码 (针对 %E4%B8%AD 这种)
+              if '%' in decoded:
+                  try:
+                      decoded = urllib.parse.unquote(decoded)
+                  except:
+                      pass
+                      
+              # 2. 尝试八进制解码 (针对 \344\270\255 这种)
+              if '\\' in decoded:
+                  try:
+                      # 利用 latin-1 和 unicode_escape 安全转码出真·中文字符
+                      decoded = decoded.encode('latin-1').decode('unicode_escape').encode('latin-1').decode('utf-8')
+                  except:
+                      pass
+                      
+              # 3. 如果前后还有包含多余的引号，脱去它并再次尝试解码
+              if decoded.startswith('"') and decoded.endswith('"'):
+                  decoded = decoded[1:-1]
+                  if '\\' in decoded:
+                      try:
+                          decoded = decoded.encode('latin-1').decode('unicode_escape').encode('latin-1').decode('utf-8')
+                      except:
+                          pass
+              
+              return decoded
+
+          # 开始处理每一个仓库
+          for repo_index, repo in enumerate(repos):
               repo_name = repo['name']
-              # 使用 PAT 构建克隆 URL
+              
+              repo_progress = (repo_index + 1) / total_repos * 100
+              print(f"\n====================================")
+              print(f">>> [总体进度: {repo_index + 1}/{total_repos} ({repo_progress:.1f}%)] 正在处理仓库: {repo_name}")
+              print(f"====================================")
+              
+              # 使用你的名字以及 PAT 设置克隆 URL
               clone_url = repo['clone_url'].replace("https://", f"https://{username}:{token}@")
               
-              print(f"\n>>> Checking repo: {repo_name}")
-              
               if os.path.exists('temp_repo'):
-                  subprocess.run(["rm", "-rf", "temp_repo"])
+                  shutil.rmtree('temp_repo')
               
               if subprocess.run(["git", "clone", clone_url, "temp_repo"], capture_output=True).returncode != 0:
+                  print(f"该仓库克隆失败: {repo_name}，可能没有权限。")
                   continue
 
               os.chdir('temp_repo')
-              subprocess.run(["git", "config", "core.quotepath", "false"])
               
-              files = subprocess.getoutput("git ls-files").split('\n')
               fixed_count = 0
-              
-              for f in files:
-                  if "\\\\" in f:
-                      old_path = f.strip('"')
-                      try:
-                          # 核心逻辑：解码八进制
-                          new_path = old_path.encode('latin-1').decode('unicode_escape').encode('latin-1').decode('utf-8')
-                          if old_path != new_path:
-                              print(f"  Fixing: {old_path} -> {new_path}")
-                              subprocess.run(["git", "mv", old_path, new_path])
-                              fixed_count += 1
-                      except:
-                          continue
-              
+              # 使用 ls-files -z 可以规避因为空格/换行符导致文件名读取截断的问题，是最底层的真实验证
+              try:
+                  output = subprocess.check_output(["git", "ls-files", "-z"]).decode('utf-8', errors='replace')
+                  files = [f for f in output.split('\0') if f]
+                  total_files = len(files)
+                  print(f"  📂 该仓库共探测到 {total_files} 个文件...")
+                  
+                  for file_index, old_path in enumerate(files):
+                      if not old_path.strip(): continue
+                      
+                      new_path = decode_path(old_path)
+                      # 如果解码后的路径不同，说明这是一个被转义的名字
+                      if old_path != new_path:
+                          # 目标上级目录必须存在，不存在则使用 os.makedirs 补全
+                          dest_dir = os.path.dirname(new_path)
+                          if dest_dir:
+                              os.makedirs(dest_dir, exist_ok=True)
+                          
+                          # 执行移动文件
+                          try:
+                              file_progress = (file_index + 1) / total_files * 100
+                              print(f"    [文件进度: {file_progress:.1f}%] 🔧 命中需修复: {old_path} -> {new_path}")
+                          except UnicodeEncodeError:
+                              # 处理极罕见的控制台编码打印错误
+                              pass
+
+                          if os.path.exists(old_path):
+                              try:
+                                  subprocess.run(["git", "mv", "-f", old_path, new_path], check=True, capture_output=True)
+                                  fixed_count += 1
+                              except subprocess.CalledProcessError as e:
+                                  print(f"    ❌ git mv 操作失败: {old_path}")
+                                  pass
+              except Exception as ex:
+                  print(f"  ❌ 处理文件时出错: {ex}")
+                  
               if fixed_count > 0:
-                  subprocess.run(["git", "add", "."])
-                  subprocess.run(["git", "commit", "-m", "chore: fix escaped filenames (global)"])
-                  subprocess.run(["git", "push"])
-                  print(f"  Done!")
+                  print(f"  ✅ [完成] 修复了 {fixed_count} 处问题，准备推送...")
+                  subprocess.run(["git", "commit", "-m", "chore: 修复中文文件目录转义为正常汉字"])
+                  push_result = subprocess.run(["git", "push"], capture_output=True)
+                  if push_result.returncode == 0:
+                      print(f"  🚀 推送成功！")
+                  else:
+                      print(f"  ❌ 推送失败！")
               else:
-                  print(f"  Clean.")
-              
+                  print(f"  ✨ [完成] 该仓库扫描完毕，未发现乱码。")
+                  
               os.chdir('..')
-              subprocess.run(["rm", "-rf", "temp_repo"])
+              shutil.rmtree('temp_repo')
+              
+          print("\n🎉 === 所有仓库全局扫描修复完毕 === 🎉")
           EOF
