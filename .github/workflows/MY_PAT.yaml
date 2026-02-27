@@ -74,37 +74,45 @@ jobs:
           print(f"✅ 成功获取了 {total_repos} 个仓库的信息，准备开始全局扫描。")
 
           def decode_name(name_str):
-              """只针对单层文件名/文件夹名进行解码，防影响整体路径"""
+              """极其狂暴的多重解码器，剥除所有的引号和转义壳"""
               decoded = name_str
+              last_decoded = ""
               
-              # 不断剥离可能存在的外层双引号
-              while decoded.startswith('"') and decoded.endswith('"') and len(decoded) >= 2:
-                  decoded = decoded[1:-1]
-              
-              # 1. URL 解码 (针对 %E4%B8%AD 这种)
-              if '%' in decoded:
-                  try:
-                      decoded = urllib.parse.unquote(decoded)
-                  except:
-                      pass
+              # 死循环：只要长相还在变化，就一直试图把洋葱剥开
+              while decoded != last_decoded:
+                  last_decoded = decoded
+                  
+                  # 脱去物理双引号或单引号 (有些乱码在头上脚下带着真实引号)
+                  if decoded.startswith('"') and decoded.endswith('"') and len(decoded) >= 2:
+                      decoded = decoded[1:-1]
+                  if decoded.startswith("'") and decoded.endswith("'") and len(decoded) >= 2:
+                      decoded = decoded[1:-1]
+                  
+                  # 优先尝试 URL 解码。有些路径变成了 %22%5C345... %22 就是双引号，%5C 是反斜杠
+                  if '%' in decoded:
+                      try:
+                          decoded = urllib.parse.unquote(decoded)
+                      except: pass
                       
-              # 2. 核心：处理八进制或十六进制转义，尤其是被当做纯字符串写入硬盘的 \345
-              if '\\' in decoded:
-                  try:
-                      temp = decoded.encode('latin-1').decode('unicode_escape')
-                      decoded = temp.encode('latin-1').decode('utf-8')
-                  except Exception:
-                      pass
-                      
+                  # 处理八进制或十六进制转义，尤其是被当做纯字符串写入硬盘的 \345
                   if '\\' in decoded:
                       try:
-                          mock_str = f'b"{decoded}"'
-                          byte_val = ast.literal_eval(mock_str)
-                          ast_decoded = byte_val.decode('utf-8')
-                          if ast_decoded != decoded:
-                              decoded = ast_decoded
+                          # 第一层剥离 \345 到字节
+                          temp = decoded.encode('latin-1').decode('unicode_escape')
+                          # 第二层重新用 utf-8 感知它
+                          decoded = temp.encode('latin-1').decode('utf-8')
                       except Exception:
                           pass
+                      
+                      # 第二手准备：利用 ast 解析带有双重转移的纯文本 \345
+                      if '\\' in decoded:
+                          try:
+                              mock_str = f'b"{decoded}"'
+                              byte_val = ast.literal_eval(mock_str)
+                              decoded_ast = byte_val.decode('utf-8')
+                              decoded = decoded_ast
+                          except Exception:
+                              pass
               
               return decoded
 
@@ -135,15 +143,11 @@ jobs:
               
               fixed_count = 0
               
-              # 🚨 【核心重塑】：放弃使用 Git 工具流！Git 的环境适应性自作聪明会吞掉转义。
-              # 我们直接扫描硬盘里面所有实际存在的东西。
+              # 【核心重塑】：全量物理探索
               paths_to_check = []
               for root, dirs, files in os.walk('.'):
-                  # 跳过 .git 文件夹
-                  if '.git' in root.split(os.sep):
-                      continue
+                  if '.git' in root.split(os.sep): continue
                       
-                  # 遇到乱码的文件夹名也要记下来 
                   for d in dirs:
                       if d == '.git': continue
                       paths_to_check.append(os.path.join(root, d))
@@ -151,9 +155,7 @@ jobs:
                   for f in files:
                       paths_to_check.append(os.path.join(root, f))
 
-              # 排序极其重要！我们必须把深层的（路径长、斜杠多的）排在前面。
-              # 必须要从最底层的文件开始改名，如果从上层文件夹开始改名，
-              # 底层文件原先的物理路径就会找不着，导致报错。
+              # 按深度排序，必须先排深的文件（最长路径在前）再排浅层的文件夹
               paths_to_check.sort(key=lambda x: x.count(os.sep), reverse=True)
               
               total_files = len(paths_to_check)
@@ -162,7 +164,6 @@ jobs:
               for file_index, old_full_path in enumerate(paths_to_check):
                   if old_full_path == '.': continue
                   
-                  # 我们只对最后一段（文件名或当前文件夹名）进行转译
                   parent_dir = os.path.dirname(old_full_path)
                   old_basename = os.path.basename(old_full_path)
                   
@@ -176,16 +177,22 @@ jobs:
                           print(f"    [硬件扫盘进度: {file_progress:.1f}%] 🔧 强力修正: [{old_basename}] -> [{new_basename}]")
                       except UnicodeEncodeError: pass
                       
-                      # 这里有极端的坑：双引号如果还依附着，可能会导致物理文件找不着，脱个壳试试
-                      actual_old = old_full_path
-                      if not os.path.exists(actual_old):
-                          stripped_old = os.path.join(parent_dir, old_basename.strip('"'))
-                          if os.path.exists(stripped_old):
-                              actual_old = stripped_old
+                      # 安全地识别这文件到底是在硬盘上的原名、带引号的名字还是什么奇葩名字
+                      actual_old = None
+                      # 假如物理底层确实是这样
+                      if os.path.exists(old_full_path):
+                          actual_old = old_full_path
+                      else:
+                          # Git 有时候不经允许连硬盘的文件都给加上双排反斜线，我们试着用 urllib 等手段找他
+                          for fallback in [old_basename.strip('"'), old_basename.replace('\\\\', '\\')]:
+                              guess_path = os.path.join(parent_dir, fallback)
+                              if os.path.exists(guess_path):
+                                  actual_old = guess_path
+                                  break
                       
-                      if os.path.exists(actual_old):
+                      if actual_old and os.path.exists(actual_old):
                           try:
-                              # 先绕开 Git，在物理硬盘层强硬进行操作
+                              # 执行操作系统强行改名
                               shutil.move(actual_old, new_full_path)
                               fixed_count += 1
                           except Exception as e:
@@ -193,9 +200,9 @@ jobs:
                   
               if fixed_count > 0:
                   print(f"  ✅ [完成] 物理修正了 {fixed_count} 处路径节点，准备告知 Git 更新索引并推送...")
-                  # -A 指令是非常强大和彻底的：它可以记录工作区里所有被我们私自移动、删除或者新增的物理文件
+                  # -A 指令强迫 Git 去比对所有的底层文件的增删
                   subprocess.run(["git", "add", "-A"])
-                  subprocess.run(["git", "commit", "-m", "chore: [强制物理扫描] 修复恶劣转义编码路径"])
+                  subprocess.run(["git", "commit", "-m", "chore: [终级强化版物理扫描] 修复恶劣转义编码与引用的路径"])
                   push_result = subprocess.run(["git", "push"], capture_output=True)
                   if push_result.returncode == 0:
                       print(f"  🚀 推送成功并覆盖！")
