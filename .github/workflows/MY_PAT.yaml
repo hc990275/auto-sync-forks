@@ -1,17 +1,32 @@
-- name: Fix All Repositories
+name: Global Filename Fixer
+
+on:
+  workflow_dispatch: # 仅手动触发，点击 Actions 页面里的 Run workflow 运行
+
+jobs:
+  fix-all-repos:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Fix All Repositories
         env:
           GH_TOKEN: ${{ secrets.MY_PAT }}
           USER_NAME: "hc990275"
         run: |
-          # 1. 安装必要的 Python 依赖
           pip install requests
-
-          # 2. 配置全局 Git 信息（确保以后提交不再转义）
+          
+          # 全局配置防止再次转义
           git config --global user.name "GitHub Action Bot"
           git config --global user.email "action@github.com"
           git config --global core.quotepath false
 
-          # 3. 运行修复脚本
           python - <<EOF
           import os
           import requests
@@ -24,8 +39,7 @@
               'Accept': 'application/vnd.github.v3+json'
           }
 
-          # 获取用户所有仓库（包括私有仓库）
-          # per_page=100 是单页上限
+          # 获取该用户作为 owner 的所有仓库
           api_url = "https://api.github.com/user/repos?per_page=100&type=owner"
           
           try:
@@ -33,65 +47,49 @@
               response.raise_for_status()
               repos = response.json()
           except Exception as e:
-              print(f"❌ 无法获取仓库列表: {e}")
+              print(f"Error fetching repos: {e}")
               exit(1)
 
           for repo in repos:
               repo_name = repo['name']
-              # 跳过当前正在运行 Action 的仓库，防止死循环（可选）
-              # if repo_name == "当前仓库名": continue
-              
-              # 使用带有 Token 的 URL 进行克隆，确保有推送权限
+              # 使用 PAT 构建克隆 URL
               clone_url = repo['clone_url'].replace("https://", f"https://{username}:{token}@")
               
-              print(f"\n{"="*50}")
-              print(f"🚀 正在处理仓库: {repo_name}")
+              print(f"\n>>> Checking repo: {repo_name}")
               
               if os.path.exists('temp_repo'):
                   subprocess.run(["rm", "-rf", "temp_repo"])
               
-              clone_res = subprocess.run(["git", "clone", clone_url, "temp_repo"], capture_output=True)
-              if clone_res.returncode != 0:
-                  print(f"  ⚠️ 克隆失败: {repo_name}")
+              if subprocess.run(["git", "clone", clone_url, "temp_repo"], capture_output=True).returncode != 0:
                   continue
 
               os.chdir('temp_repo')
-              
-              # 确保该仓库也关闭转义配置
               subprocess.run(["git", "config", "core.quotepath", "false"])
               
-              # 获取受版本控制的文件列表
               files = subprocess.getoutput("git ls-files").split('\n')
               fixed_count = 0
               
               for f in files:
-                  # Git 转义通常以引号开头，或包含反斜杠
-                  if "\\" in f:
-                      original = f.strip('"')
+                  if "\\\\" in f:
+                      old_path = f.strip('"')
                       try:
-                          # 将八进制转义序列（如 \345）转回中文
-                          new_name = original.encode('latin-1').decode('unicode_escape').encode('latin-1').decode('utf-8')
-                          if original != new_name:
-                              print(f"  ✅ 修复文件名: {original} -> {new_name}")
-                              # 使用 git mv 保持历史记录
-                              subprocess.run(["git", "mv", original, new_name])
+                          # 核心逻辑：解码八进制
+                          new_path = old_path.encode('latin-1').decode('unicode_escape').encode('latin-1').decode('utf-8')
+                          if old_path != new_path:
+                              print(f"  Fixing: {old_path} -> {new_path}")
+                              subprocess.run(["git", "mv", old_path, new_path])
                               fixed_count += 1
                       except:
                           continue
               
               if fixed_count > 0:
                   subprocess.run(["git", "add", "."])
-                  subprocess.run(["git", "commit", "-m", "chore: 修复被转义的中文文件名 (Global Fix)"])
-                  push_res = subprocess.run(["git", "push"], capture_output=True)
-                  if push_res.returncode == 0:
-                      print(f"  🎉 已成功推送至 {repo_name}")
-                  else:
-                      print(f"  ❌ 推送失败: {push_res.stderr.decode()}")
+                  subprocess.run(["git", "commit", "-m", "chore: fix escaped filenames (global)"])
+                  subprocess.run(["git", "push"])
+                  print(f"  Done!")
               else:
-                  print(f"  ✔ 无需修复。")
+                  print(f"  Clean.")
               
               os.chdir('..')
               subprocess.run(["rm", "-rf", "temp_repo"])
-
-          print("\n✨ 所有仓库检查完毕！")
           EOF
