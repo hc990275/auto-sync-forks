@@ -33,6 +33,7 @@ jobs:
           import urllib.parse
           import shutil
           import sys
+          import ast
 
           token = os.getenv('GH_TOKEN')
           username = os.getenv('USER_NAME')
@@ -48,9 +49,10 @@ jobs:
 
           subprocess.run(["git", "config", "--global", "user.name", "GitHub Action Bot"])
           subprocess.run(["git", "config", "--global", "user.email", "action@github.com"])
-          subprocess.run(["git", "config", "--global", "core.quotepath", "false"])
+          # 开启 quotepath 为 true 其实是希望万一要用到 git 命令，也不让它自作聪明的翻译！
+          subprocess.run(["git", "config", "--global", "core.quotepath", "true"])
 
-          # 获取所有仓库（加入分页功能，防止仓库数超过100只获取到部分）
+          # 获取所有仓库
           repos = []
           page = 1
           while True:
@@ -71,31 +73,37 @@ jobs:
           total_repos = len(repos)
           print(f"✅ 成功获取了 {total_repos} 个仓库的信息，准备开始全局扫描。")
 
-          def decode_path(path_str):
-              decoded = path_str
+          def decode_name(name_str):
+              """只针对单层文件名/文件夹名进行解码，防影响整体路径"""
+              decoded = name_str
               
-              # 1. 尝试 URL 解码 (针对 %E4%B8%AD 这种)
+              # 不断剥离可能存在的外层双引号
+              while decoded.startswith('"') and decoded.endswith('"') and len(decoded) >= 2:
+                  decoded = decoded[1:-1]
+              
+              # 1. URL 解码 (针对 %E4%B8%AD 这种)
               if '%' in decoded:
                   try:
                       decoded = urllib.parse.unquote(decoded)
                   except:
                       pass
                       
-              # 2. 尝试八进制解码 (针对 \344\270\255 这种)
+              # 2. 核心：处理八进制或十六进制转义，尤其是被当做纯字符串写入硬盘的 \345
               if '\\' in decoded:
                   try:
-                      # 利用 latin-1 和 unicode_escape 安全转码出真·中文字符
-                      decoded = decoded.encode('latin-1').decode('unicode_escape').encode('latin-1').decode('utf-8')
-                  except:
+                      temp = decoded.encode('latin-1').decode('unicode_escape')
+                      decoded = temp.encode('latin-1').decode('utf-8')
+                  except Exception:
                       pass
                       
-              # 3. 如果前后还有包含多余的引号，脱去它并再次尝试解码
-              if decoded.startswith('"') and decoded.endswith('"'):
-                  decoded = decoded[1:-1]
                   if '\\' in decoded:
                       try:
-                          decoded = decoded.encode('latin-1').decode('unicode_escape').encode('latin-1').decode('utf-8')
-                      except:
+                          mock_str = f'b"{decoded}"'
+                          byte_val = ast.literal_eval(mock_str)
+                          ast_decoded = byte_val.decode('utf-8')
+                          if ast_decoded != decoded:
+                              decoded = ast_decoded
+                      except Exception:
                           pass
               
               return decoded
@@ -108,71 +116,100 @@ jobs:
               print(f"\n====================================")
               print(f">>> [总体进度: {repo_index + 1}/{total_repos} ({repo_progress:.1f}%)] 正在处理仓库: {repo_name}")
               print(f"====================================")
-              sys.stdout.flush() # 强制立刻刷新缓冲输出
+              sys.stdout.flush() 
               
-              # 使用你的名字以及 PAT 设置克隆 URL
               clone_url = repo['clone_url'].replace("https://", f"https://{username}:{token}@")
               
               if os.path.exists('temp_repo'):
-                  shutil.rmtree('temp_repo')
+                  # 处理由于 Windows 等权限拒绝引发的目录删除失败
+                  try:
+                      shutil.rmtree('temp_repo')
+                  except:
+                      subprocess.run(["rm", "-rf", "temp_repo"])
               
-              # 注意：这里加入了 --depth 1 浅克隆，只需要克隆一层最新文件，极大加速并防止网络卡死
               if subprocess.run(["git", "clone", "--depth", "1", clone_url, "temp_repo"], capture_output=True).returncode != 0:
-                  print(f"该仓库克隆失败: {repo_name}，可能没有权限或者该仓库为空。")
+                  print(f"该仓库克隆失败: {repo_name}")
                   continue
 
               os.chdir('temp_repo')
               
               fixed_count = 0
-              # 使用 ls-files -z 可以规避因为空格/换行符导致文件名读取截断的问题，是最底层的真实验证
-              try:
-                  output = subprocess.check_output(["git", "ls-files", "-z"]).decode('utf-8', errors='replace')
-                  files = [f for f in output.split('\0') if f]
-                  total_files = len(files)
-                  print(f"  📂 该仓库共探测到 {total_files} 个文件...")
-                  
-                  for file_index, old_path in enumerate(files):
-                      if not old_path.strip(): continue
+              
+              # 🚨 【核心重塑】：放弃使用 Git 工具流！Git 的环境适应性自作聪明会吞掉转义。
+              # 我们直接扫描硬盘里面所有实际存在的东西。
+              paths_to_check = []
+              for root, dirs, files in os.walk('.'):
+                  # 跳过 .git 文件夹
+                  if '.git' in root.split(os.sep):
+                      continue
                       
-                      new_path = decode_path(old_path)
-                      # 如果解码后的路径不同，说明这是一个被转义的名字
-                      if old_path != new_path:
-                          # 目标上级目录必须存在，不存在则使用 os.makedirs 补全
-                          dest_dir = os.path.dirname(new_path)
-                          if dest_dir:
-                              os.makedirs(dest_dir, exist_ok=True)
-                          
-                          # 执行移动文件
-                          try:
-                              file_progress = (file_index + 1) / total_files * 100
-                              print(f"    [文件进度: {file_progress:.1f}%] 🔧 命中需修复: {old_path} -> {new_path}")
-                          except UnicodeEncodeError:
-                              # 处理极罕见的控制台编码打印错误
-                              pass
+                  # 遇到乱码的文件夹名也要记下来 
+                  for d in dirs:
+                      if d == '.git': continue
+                      paths_to_check.append(os.path.join(root, d))
+                      
+                  for f in files:
+                      paths_to_check.append(os.path.join(root, f))
 
-                          if os.path.exists(old_path):
-                              try:
-                                  subprocess.run(["git", "mv", "-f", old_path, new_path], check=True, capture_output=True)
-                                  fixed_count += 1
-                              except subprocess.CalledProcessError as e:
-                                  print(f"    ❌ git mv 操作失败: {old_path}")
-                                  pass
-              except Exception as ex:
-                  print(f"  ❌ 处理文件时出错: {ex}")
+              # 排序极其重要！我们必须把深层的（路径长、斜杠多的）排在前面。
+              # 必须要从最底层的文件开始改名，如果从上层文件夹开始改名，
+              # 底层文件原先的物理路径就会找不着，导致报错。
+              paths_to_check.sort(key=lambda x: x.count(os.sep), reverse=True)
+              
+              total_files = len(paths_to_check)
+              print(f"  📂 该仓库硬盘物理层共探测到 {total_files} 个路径节点...")
+                  
+              for file_index, old_full_path in enumerate(paths_to_check):
+                  if old_full_path == '.': continue
+                  
+                  # 我们只对最后一段（文件名或当前文件夹名）进行转译
+                  parent_dir = os.path.dirname(old_full_path)
+                  old_basename = os.path.basename(old_full_path)
+                  
+                  new_basename = decode_name(old_basename)
+                  
+                  if old_basename != new_basename:
+                      new_full_path = os.path.join(parent_dir, new_basename)
+                      
+                      file_progress = (file_index + 1) / total_files * 100
+                      try:
+                          print(f"    [硬件扫盘进度: {file_progress:.1f}%] 🔧 强力修正: [{old_basename}] -> [{new_basename}]")
+                      except UnicodeEncodeError: pass
+                      
+                      # 这里有极端的坑：双引号如果还依附着，可能会导致物理文件找不着，脱个壳试试
+                      actual_old = old_full_path
+                      if not os.path.exists(actual_old):
+                          stripped_old = os.path.join(parent_dir, old_basename.strip('"'))
+                          if os.path.exists(stripped_old):
+                              actual_old = stripped_old
+                      
+                      if os.path.exists(actual_old):
+                          try:
+                              # 先绕开 Git，在物理硬盘层强硬进行操作
+                              shutil.move(actual_old, new_full_path)
+                              fixed_count += 1
+                          except Exception as e:
+                              print(f"    ❌ 重命名物理硬盘文件失败: {e}")
                   
               if fixed_count > 0:
-                  print(f"  ✅ [完成] 修复了 {fixed_count} 处问题，准备推送...")
-                  subprocess.run(["git", "commit", "-m", "chore: 修复中文文件目录转义为正常汉字"])
+                  print(f"  ✅ [完成] 物理修正了 {fixed_count} 处路径节点，准备告知 Git 更新索引并推送...")
+                  # -A 指令是非常强大和彻底的：它可以记录工作区里所有被我们私自移动、删除或者新增的物理文件
+                  subprocess.run(["git", "add", "-A"])
+                  subprocess.run(["git", "commit", "-m", "chore: [强制物理扫描] 修复恶劣转义编码路径"])
                   push_result = subprocess.run(["git", "push"], capture_output=True)
                   if push_result.returncode == 0:
-                      print(f"  🚀 推送成功！")
+                      print(f"  🚀 推送成功并覆盖！")
                   else:
-                      print(f"  ❌ 推送失败！")
+                      print(f"  ❌ 推送失败，可能是由于没有权限或者没有文件变动！")
               else:
-                  print(f"  ✨ [完成] 该仓库扫描完毕，未发现乱码。")
+                  print(f"  ✨ [完成] 该仓库扫描完毕，未发现可疑的乱码特征节点。")
                   
               os.chdir('..')
-              shutil.rmtree('temp_repo')
               
-          print("\n🎉 === 所有仓库全局扫描修复完毕 === 🎉")
+              try:
+                  shutil.rmtree('temp_repo')
+              except:
+                  subprocess.run(["rm", "-rf", "temp_repo"])
+              
+          print("\n🎉 === 所有仓库全局物理级扫描修复完毕 === 🎉")
           EOF
